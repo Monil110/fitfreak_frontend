@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Calendar, TrendingUp, Flame, Activity, Beef, Wheat, Droplet } from "lucide-react";
 import NavBar from "@/components/NavBar";
 import PageHeader from "@/components/PageHeader";
+import ExerciseProgressChart from "@/components/ExerciseProgressChart";
 import api from "@/lib/api";
 
 const Reports = () => {
@@ -217,6 +218,11 @@ const Reports = () => {
                 )}
               </div>
             </ReportCard>
+          </div>
+
+          {/* Exercise Progress */}
+          <div className="mt-6">
+            <ExerciseProgressChart />
           </div>
         </div>
       </div>

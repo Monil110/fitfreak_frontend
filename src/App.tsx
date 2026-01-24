@@ -15,6 +15,7 @@ import Diet from "./pages/Diet";
 import Schedule from "./pages/Schedule";
 import Reports from "./pages/Reports";
 import Profile from "./pages/Profile";
+import CompleteProfile from "./pages/CompleteProfile";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,15 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/auth" element={<Auth />} />
+
+            <Route
+              path="/complete-profile"
+              element={
+                <ProtectedRoute>
+                  <CompleteProfile />
+                </ProtectedRoute>
+              }
+            />
 
             <Route
               path="/dashboard"

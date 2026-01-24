@@ -1,42 +1,40 @@
 import { useState, useEffect, useRef } from "react";
-import {
-  User,
-  Phone,
-  Calendar,
-  Ruler,
-  Weight,
-  Mail,
-  Users,
-  ChevronDown,
-  Camera,
-  RotateCcw,
-  Loader2,
-} from "lucide-react";
+import { User, Settings, Camera, RotateCcw, Loader2 } from "lucide-react";
 import NavBar from "@/components/NavBar";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import ActivityHeatmap from "@/components/ActivityHeatmap";
+import EditProfileDialog from "@/components/EditProfileDialog";
+import { Button } from "@/components/ui/button";
 import api from "@/lib/api";
 
-const COUNTRY_CODES = [
-  { code: "+1", country: "US", flag: "🇺🇸" },
-  { code: "+44", country: "UK", flag: "🇬🇧" },
-  { code: "+91", country: "IN", flag: "🇮🇳" },
-  { code: "+86", country: "CN", flag: "🇨🇳" },
-  { code: "+81", country: "JP", flag: "🇯🇵" },
-  { code: "+49", country: "DE", flag: "🇩🇪" },
-  { code: "+33", country: "FR", flag: "🇫🇷" },
-  { code: "+61", country: "AU", flag: "🇦🇺" },
-  { code: "+55", country: "BR", flag: "🇧🇷" },
-  { code: "+7", country: "RU", flag: "🇷🇺" },
-];
+interface ProfileData {
+  firstName: string;
+  lastName: string;
+  email: string;
+  countryCode: string;
+  phone: string;
+  gender: string;
+  age: number | string;
+  height: number | string;
+  weight: number | string;
+  bio: string;
+  imageUrl?: string;
+}
+
+interface SocialStats {
+  posts: number;
+  followers: number;
+  following: number;
+}
 
 const Profile = () => {
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [form, setForm] = useState({
+  
+  const [profileData, setProfileData] = useState<ProfileData>({
     firstName: "",
     lastName: "",
     email: "",
@@ -46,60 +44,45 @@ const Profile = () => {
     age: "",
     height: "",
     weight: "",
+    bio: "",
+  });
+
+  const [socialStats, setSocialStats] = useState<SocialStats>({
+    posts: 0,
+    followers: 0,
+    following: 0,
   });
 
   useEffect(() => {
     const fetchProfile = async () => {
       try {
         const res = await api.get("/profile");
-
-        setForm({
+        setProfileData({
           firstName: res.data.firstName || "",
           lastName: res.data.lastName || "",
           email: res.data.email || "",
           countryCode: res.data.countryCode || "+1",
           phone: res.data.phone || "",
           gender: res.data.gender || "",
-          age: res.data.age?.toString() || "",
-          height: res.data.height?.toString() || "",
-          weight: res.data.weight?.toString() || "",
+          age: res.data.age || "",
+          height: res.data.height || "",
+          weight: res.data.weight || "",
+          bio: res.data.bio || "",
         });
-
         setProfileImage(res.data.imageUrl || null);
+        
+        if (res.data.socialStats) {
+          setSocialStats(res.data.socialStats);
+        }
       } catch (err) {
-        console.error(err);
+        console.error("Error fetching profile:", err);
         alert("Failed to load profile");
       } finally {
         setLoading(false);
       }
     };
-
     fetchProfile();
   }, []);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-
-    try {
-      await api.put("/profile", {
-        firstName: form.firstName,
-        lastName: form.lastName,
-        countryCode: form.countryCode,
-        phone: form.phone,
-        gender: form.gender,
-        age: form.age ? +form.age : null,
-        height: form.height ? +form.height : null,
-        weight: form.weight ? +form.weight : null,
-      });
-      alert("Profile updated successfully!");
-    } catch (err) {
-      console.error(err);
-      alert("Failed to update profile");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -154,19 +137,31 @@ const Profile = () => {
     }
   };
 
-  const bmi =
-    form.height && form.weight
-      ? (
-          parseFloat(form.weight) /
-          (parseFloat(form.height) / 100) ** 2
-        ).toFixed(1)
-      : null;
+  const handleSaveProfile = async (data: ProfileData) => {
+    try {
+      await api.put("/profile", {
+        firstName: data.firstName,
+        lastName: data.lastName,
+        countryCode: data.countryCode,
+        phone: data.phone,
+        gender: data.gender,
+        age: data.age ? +data.age : null,
+        height: data.height ? +data.height : null,
+        weight: data.weight ? +data.weight : null,
+        bio: data.bio,
+      });
+      setProfileData(data);
+      alert("Profile updated successfully!");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to update profile");
+    }
+  };
 
-  const getBmiStatus = (bmi: number) => {
-    if (bmi < 18.5) return { label: "Underweight", color: "text-yellow-600" };
-    if (bmi < 25) return { label: "Normal", color: "text-success" };
-    if (bmi < 30) return { label: "Overweight", color: "text-yellow-600" };
-    return { label: "Obese", color: "text-destructive" };
+  const formatNumber = (num: number) => {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + "M";
+    if (num >= 1000) return (num / 1000).toFixed(1) + "K";
+    return num.toString();
   };
 
   if (loading) {
@@ -192,32 +187,39 @@ const Profile = () => {
           <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-accent/30 rounded-full blur-3xl -translate-y-1/3 translate-x-1/4 animate-float-slow" />
           <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-accent/15 rounded-full blur-3xl translate-y-1/3 -translate-x-1/4 animate-float-slow-reverse" />
         </div>
+
         <div className="relative max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {/* Profile Header Card */}
           <div className="bg-card rounded-xl border border-border overflow-hidden">
-            <div className="bg-primary p-6">
-              <div className="flex items-center gap-4">
+            {/* Header Background */}
+            <div className="h-24 bg-gradient-to-r from-accent/30 via-accent/20 to-primary/20" />
+
+            {/* Profile Info Section */}
+            <div className="px-6 pb-6">
+              {/* Avatar & Actions Row */}
+              <div className="flex items-end justify-between -mt-12 mb-4">
+                {/* Profile Picture with Upload/Reset Options */}
                 <div className="relative group">
-                  <div className="w-20 h-20 bg-primary-foreground/10 backdrop-blur rounded-full flex items-center justify-center border-2 border-primary-foreground/20 overflow-hidden">
+                  <div className="w-24 h-24 bg-card rounded-full flex items-center justify-center border-4 border-card overflow-hidden shadow-lg">
                     {uploading ? (
-                      <Loader2 className="w-8 h-8 text-primary-foreground animate-spin" />
+                      <Loader2 className="w-8 h-8 text-muted-foreground animate-spin" />
                     ) : profileImage ? (
-                      <img
-                        src={profileImage}
-                        alt="Profile"
-                        className="w-full h-full object-cover"
-                      />
+                      <img src={profileImage} alt="Profile" className="w-full h-full object-cover" />
                     ) : (
-                      <User className="w-10 h-10 text-primary-foreground" />
+                      <div className="w-full h-full bg-secondary flex items-center justify-center">
+                        <User className="w-12 h-12 text-muted-foreground" />
+                      </div>
                     )}
                   </div>
+                  
+                  {/* Upload/Reset Controls - Show on Hover */}
                   {!uploading && (
                     <div className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        className="w-8 h-8 bg-accent rounded-full flex items-center justify-center hover:bg-accent/90 transition-colors"
+                        className="w-8 h-8 bg-accent rounded-full flex items-center justify-center hover:bg-accent/90 transition-colors shadow-lg"
                         title="Upload photo"
-                        disabled={uploading}
                       >
                         <Camera className="w-4 h-4 text-accent-foreground" />
                       </button>
@@ -225,15 +227,16 @@ const Profile = () => {
                         <button
                           type="button"
                           onClick={handleResetImage}
-                          className="w-8 h-8 bg-secondary rounded-full flex items-center justify-center hover:bg-secondary/90 transition-colors"
+                          className="w-8 h-8 bg-secondary rounded-full flex items-center justify-center hover:bg-secondary/90 transition-colors shadow-lg"
                           title="Reset to default"
-                          disabled={uploading}
                         >
                           <RotateCcw className="w-4 h-4 text-foreground" />
                         </button>
                       )}
                     </div>
                   )}
+                  
+                  {/* Hidden File Input */}
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -243,234 +246,95 @@ const Profile = () => {
                     disabled={uploading}
                   />
                 </div>
-                <div>
-                  <h2 className="text-xl font-bold text-primary-foreground">
-                    {form.firstName || form.lastName
-                      ? `${form.firstName} ${form.lastName}`.trim()
-                      : "Your Name"}
-                  </h2>
-                  <p className="text-primary-foreground/70">
-                    {form.email || "No email"}
-                  </p>
-                </div>
-              </div>
-            </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
-              <div>
-                <div className="grid grid-cols-2 gap-4">
-                  <InputField
-                    label="First Name"
-                    type="text"
-                    value={form.firstName}
-                    onChange={(e) =>
-                      setForm({ ...form, firstName: e.target.value })
-                    }
-                    required
-                  />
-                  <InputField
-                    label="Last Name"
-                    type="text"
-                    value={form.lastName}
-                    onChange={(e) =>
-                      setForm({ ...form, lastName: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-
-                <div className="mt-4">
-                  <InputField
-                    label="Email"
-                    icon={<Mail className="w-4 h-4" />}
-                    type="email"
-                    value={form.email}
-                    onChange={(e) =>
-                      setForm({ ...form, email: e.target.value })
-                    }
-                    disabled
-                  />
-                </div>
-
-                <div className="mt-4">
-                  <label className="block text-sm font-medium text-foreground mb-1.5">
-                    Phone
-                  </label>
-                  <div className="flex gap-2">
-                    <div className="relative">
-                      <select
-                        value={form.countryCode}
-                        onChange={(e) =>
-                          setForm({ ...form, countryCode: e.target.value })
-                        }
-                        className="appearance-none w-24 pr-8 py-2.5 pl-3 bg-secondary border-0 rounded-lg text-sm text-foreground focus:ring-2 focus:ring-ring outline-none transition-all cursor-pointer"
-                      >
-                        {COUNTRY_CODES.map((c) => (
-                          <option key={c.code} value={c.code}>
-                            {c.flag} {c.code}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                    </div>
-                    <div className="relative flex-1">
-                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <input
-                        type="tel"
-                        value={form.phone}
-                        onChange={(e) =>
-                          setForm({ ...form, phone: e.target.value })
-                        }
-                        className="w-full pl-10 pr-3 py-2.5 bg-secondary border-0 rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-ring outline-none transition-all"
-                        placeholder="Phone number"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <label className="block text-sm font-medium text-foreground mb-1.5">
-                    Gender
-                  </label>
-                  <div className="flex gap-3">
-                    {[
-                      { value: "male", label: "Male" },
-                      { value: "female", label: "Female" },
-                      { value: "other", label: "Other" },
-                    ].map((option) => (
-                      <label
-                        key={option.value}
-                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg cursor-pointer transition-all ${
-                          form.gender === option.value
-                            ? "bg-accent text-accent-foreground"
-                            : "bg-secondary text-foreground hover:bg-secondary/80"
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="gender"
-                          value={option.value}
-                          checked={form.gender === option.value}
-                          onChange={(e) =>
-                            setForm({ ...form, gender: e.target.value })
-                          }
-                          className="sr-only"
-                        />
-                        <Users className="w-4 h-4" />
-                        {option.label}
-                      </label>
-                    ))}
-                  </div>
+                {/* Edit Profile Button */}
+                <div className="flex gap-2 mb-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditDialogOpen(true)}
+                    className="gap-2"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Edit Profile
+                  </Button>
                 </div>
               </div>
 
-              <div className="border-t border-border" />
-
-              <div>
-                <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
-                  <Calendar className="w-5 h-5 text-accent" />
-                  Fitness Details
-                </h3>
-                <div className="grid grid-cols-3 gap-4">
-                  <InputField
-                    label="Age"
-                    icon={<Calendar className="w-4 h-4" />}
-                    type="number"
-                    value={form.age}
-                    onChange={(e) => setForm({ ...form, age: e.target.value })}
-                    min="1"
-                    max="120"
-                  />
-                  <InputField
-                    label="Height (cm)"
-                    icon={<Ruler className="w-4 h-4" />}
-                    type="number"
-                    value={form.height}
-                    onChange={(e) =>
-                      setForm({ ...form, height: e.target.value })
-                    }
-                    min="1"
-                    max="300"
-                  />
-                  <InputField
-                    label="Weight (kg)"
-                    icon={<Weight className="w-4 h-4" />}
-                    type="number"
-                    value={form.weight}
-                    onChange={(e) =>
-                      setForm({ ...form, weight: e.target.value })
-                    }
-                    min="1"
-                    max="500"
-                  />
-                </div>
+              {/* Name & Username */}
+              <div className="mb-4">
+                <h1 className="text-xl font-bold text-foreground">
+                  {profileData.firstName} {profileData.lastName}
+                </h1>
+                <p className="text-muted-foreground text-sm">
+                  @{profileData.firstName.toLowerCase()}{profileData.lastName.toLowerCase()}
+                </p>
               </div>
 
-              {bmi && (
-                <div className="bg-secondary rounded-xl p-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-accent/10 cursor-pointer">
-                  <p className="text-sm text-muted-foreground mb-1">Your BMI</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-bold text-foreground">
-                      {bmi}
-                    </span>
-                    <span
-                      className={`text-sm font-medium ${
-                        getBmiStatus(parseFloat(bmi)).color
-                      }`}
-                    >
-                      {getBmiStatus(parseFloat(bmi)).label}
-                    </span>
-                  </div>
-                </div>
+              {/* Bio */}
+              {profileData.bio && (
+                <p className="text-foreground text-sm mb-4 whitespace-pre-line">
+                  {profileData.bio}
+                </p>
               )}
 
-              <button
-                type="submit"
-                disabled={saving}
-                className="w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {saving ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Update Profile"
+              {/* Stats Row */}
+              <div className="flex gap-6 py-4 border-t border-b border-border">
+                <StatItem value={socialStats.followers} label="Followers" formatted={formatNumber(socialStats.followers)} />
+                <StatItem value={socialStats.following} label="Following" formatted={formatNumber(socialStats.following)} />
+              </div>
+
+              {/* Quick Stats */}
+              <div className="grid grid-cols-3 gap-4 mt-4">
+                {profileData.age && (
+                  <QuickStat label="Age" value={`${profileData.age} yrs`} />
                 )}
-              </button>
-            </form>
+                {profileData.height && (
+                  <QuickStat label="Height" value={`${profileData.height} cm`} />
+                )}
+                {profileData.weight && (
+                  <QuickStat label="Weight" value={`${profileData.weight} kg`} />
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <ActivityHeatmap weeks={20} />
           </div>
         </div>
       </div>
+
+      {/* Edit Profile Dialog */}
+      <EditProfileDialog
+        open={editDialogOpen}
+        onOpenChange={setEditDialogOpen}
+        formData={profileData}
+        onSave={handleSaveProfile}
+      />
     </>
   );
 };
 
-const InputField = ({
-  label,
-  icon,
-  ...props
-}: {
-  label: string;
-  icon?: React.ReactNode;
-} & React.InputHTMLAttributes<HTMLInputElement>) => (
-  <div>
-    <label className="block text-sm font-medium text-foreground mb-1.5">
-      {label}
-    </label>
-    <div className="relative">
-      {icon && (
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-          {icon}
-        </span>
-      )}
-      <input
-        {...props}
-        className={`w-full pr-3 py-2.5 bg-secondary border-0 rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-ring outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-          icon ? "pl-10" : "pl-3"
-        }`}
-      />
-    </div>
+const StatItem = ({ 
+  value, 
+  label, 
+  formatted 
+}: { 
+  value: number; 
+  label: string; 
+  formatted?: string;
+}) => (
+  <button className="text-center hover:opacity-70 transition-opacity">
+    <p className="text-lg font-bold text-foreground">{formatted || value}</p>
+    <p className="text-xs text-muted-foreground">{label}</p>
+  </button>
+);
+
+const QuickStat = ({ label, value }: { label: string; value: string }) => (
+  <div className="bg-secondary rounded-lg p-3 text-center transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-accent/10 cursor-pointer">
+    <p className="text-xs text-muted-foreground mb-1">{label}</p>
+    <p className="text-sm font-semibold text-foreground">{value}</p>
   </div>
 );
 
