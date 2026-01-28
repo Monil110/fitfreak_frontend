@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -18,75 +23,106 @@ interface ActivityHeatmapProps {
   weeks?: number;
 }
 
-const normalizeDate = (date: string) =>
-  new Date(date).toISOString().split("T")[0];
+/* ---------- LOCAL DATE NORMALIZATION (NO UTC) ---------- */
+const normalizeDate = (date: Date) => {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(date.getDate()).padStart(2, "0")}`;
+};
 
 const ActivityHeatmap = ({ weeks = 20 }: ActivityHeatmapProps) => {
-  const [workoutsByDate, setWorkoutsByDate] = useState<Record<string, number>>({});
+  const [workoutsByDate, setWorkoutsByDate] = useState<Record<string, number>>(
+    {}
+  );
   const [loading, setLoading] = useState(true);
-  const currentYear = new Date().getFullYear();
-  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
+
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const [selectedYear, setSelectedYear] = useState<string>("last6");
 
   const years = useMemo(() => {
-    const list: number[] = [];
-    for (let y = currentYear; y >= currentYear - 4; y--) list.push(y);
-    return list;
+    const arr: number[] = [];
+    for (let y = currentYear; y >= currentYear - 4; y--) arr.push(y);
+    return arr;
   }, [currentYear]);
 
+  /* ---------- FETCH WORKOUTS ---------- */
   useEffect(() => {
     const fetchWorkouts = async () => {
       try {
         const res = await api.get("/workouts");
         const list = res.data || [];
-        const byDate: Record<string, number> = {};
+        const map: Record<string, number> = {};
+
         list.forEach((w: { date: string }) => {
-          const d = normalizeDate(w.date);
-          byDate[d] = (byDate[d] ?? 0) + 1;
+          const d = new Date(w.date);
+          const normalized = normalizeDate(d);
+          map[normalized] = (map[normalized] ?? 0) + 1;
         });
-        setWorkoutsByDate(byDate);
-      } catch (err) {
-        console.error("Failed to load workouts for activity heatmap");
+
+        setWorkoutsByDate(map);
+      } catch {
+        console.error("Failed to load workouts");
       } finally {
         setLoading(false);
       }
     };
+
     fetchWorkouts();
   }, []);
 
-  // Build activity for selected year (Jan 1–Dec 31)
+  /* ---------- GENERATE DAILY DATA ---------- */
   const activityData = useMemo(() => {
     const data: ActivityDay[] = [];
-    const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-    const totalDays = isLeap(selectedYear) ? 366 : 365;
+    let startDate: Date;
+    let endDate: Date;
 
-    for (let i = 0; i < totalDays; i++) {
-      const date = new Date(selectedYear, 0, 1);
-      date.setDate(date.getDate() + i);
-      const dateStr = date.toISOString().split("T")[0];
-      const workoutCount = workoutsByDate[dateStr] ?? 0;
-      const count =
-        workoutCount > 0 ? Math.min(4, Math.max(1, workoutCount)) : 0;
+    if (selectedYear === "last6") {
+      endDate = new Date(today);
+      startDate = new Date(today);
+      startDate.setMonth(startDate.getMonth() - 6);
+      startDate.setDate(startDate.getDate() + 1);
+    } else {
+      const year = parseInt(selectedYear);
+      startDate = new Date(year, 0, 1);
+      endDate =
+        year === today.getFullYear()
+          ? new Date(today)
+          : new Date(year, 11, 31);
+    }
 
-      data.push({ date: dateStr, count });
+    const d = new Date(startDate);
+    while (d <= endDate) {
+      const dateStr = normalizeDate(d);
+      const workouts = workoutsByDate[dateStr] ?? 0;
+
+      data.push({
+        date: dateStr,
+        count: workouts > 0 ? Math.min(4, workouts) : 0,
+      });
+
+      d.setDate(d.getDate() + 1);
     }
 
     return data;
-  }, [workoutsByDate, selectedYear]);
+  }, [workoutsByDate, selectedYear, today]);
 
-  // Group by weeks
+  /* ---------- GROUP INTO SUNDAY-ALIGNED WEEKS (ALWAYS PAD) ---------- */
   const weekData = useMemo(() => {
     const result: ActivityDay[][] = [];
     let currentWeek: ActivityDay[] = [];
-    
-    // Find what day of week the first day is
-    const firstDate = new Date(activityData[0]?.date);
+
+    if (activityData.length === 0) return result;
+
+    // ALWAYS pad to Sunday, regardless of year selection
+    const firstDate = new Date(activityData[0].date);
     const startDayOfWeek = firstDate.getDay();
-    
-    // Add empty cells for alignment
+
     for (let i = 0; i < startDayOfWeek; i++) {
-      currentWeek.push({ date: '', count: -1 });
+      currentWeek.push({ date: "", count: -1 });
     }
-    
+
     activityData.forEach((day) => {
       currentWeek.push(day);
       if (currentWeek.length === 7) {
@@ -94,21 +130,44 @@ const ActivityHeatmap = ({ weeks = 20 }: ActivityHeatmapProps) => {
         currentWeek = [];
       }
     });
-    
+
     if (currentWeek.length > 0) {
-      // Fill remaining days with empty cells
-      while (currentWeek.length < 7) {
-        currentWeek.push({ date: '', count: -1 });
-      }
       result.push(currentWeek);
     }
-    
+
     return result;
   }, [activityData]);
 
+  /* ---------- COMPUTE MONTH LABELS (ONLY SHOW AT MONTH BOUNDARIES) ---------- */
+  const monthLabels = useMemo(() => {
+    const labels: string[] = [];
+    let currentMonth = -1;
+
+    weekData.forEach((week) => {
+      const validDay = week.find((d) => d.date);
+      if (validDay) {
+        const date = new Date(validDay.date);
+        const month = date.getMonth();
+        
+        // Only show label at the first week of each month
+        if (month !== currentMonth) {
+          currentMonth = month;
+          labels.push(date.toLocaleDateString("en-US", { month: "short" }));
+        } else {
+          labels.push("");
+        }
+      } else {
+        labels.push("");
+      }
+    });
+
+    return labels;
+  }, [weekData]);
+
+  /* ---------- HELPERS ---------- */
   const getIntensityClass = (count: number) => {
     if (count === -1) return "bg-transparent";
-    if (count === 0) return "bg-muted/50";
+    if (count === 0) return "bg-muted-foreground/20";
     if (count === 1) return "bg-accent/30";
     if (count === 2) return "bg-accent/50";
     if (count === 3) return "bg-accent/75";
@@ -116,62 +175,46 @@ const ActivityHeatmap = ({ weeks = 20 }: ActivityHeatmapProps) => {
   };
 
   const formatDate = (dateStr: string) => {
-    if (!dateStr) return '';
+    if (!dateStr) return "";
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { 
-      weekday: 'short', 
-      month: 'short', 
-      day: 'numeric',
-      year: 'numeric'
+    return date.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
     });
   };
 
-  const getActivityLabel = (count: number) => {
-    if (count === 0) return "No workout";
-    if (count === 1) return "1 workout";
-    return `${count} workouts`;
-  };
-
-  const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-  // Get month labels
-  const monthLabels = useMemo(() => {
-    const labels: { month: string; weekIndex: number }[] = [];
-    let currentMonth = '';
-    
-    weekData.forEach((week, weekIndex) => {
-      const validDay = week.find(d => d.date);
-      if (validDay) {
-        const date = new Date(validDay.date);
-        const month = date.toLocaleDateString('en-US', { month: 'short' });
-        if (month !== currentMonth) {
-          labels.push({ month, weekIndex });
-          currentMonth = month;
-        }
-      }
-    });
-    
-    return labels;
-  }, [weekData]);
+  const getLabel = (c: number) =>
+    c === 0 ? "No workout" : `${c} workout${c > 1 ? "s" : ""}`;
 
   const totalWorkouts = activityData.filter((d) => d.count > 0).length;
 
+  const getYearLabel = () => {
+    if (selectedYear === "last6") return "the last 6 months";
+    return selectedYear;
+  };
+
   if (loading) {
     return (
-      <div className="bg-card rounded-xl border border-border p-6">
-        <div className="flex items-center justify-center py-12">
-          <div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-        </div>
+      <div className="bg-card border rounded-xl p-6 flex justify-center py-12">
+        <div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
     <TooltipProvider>
-      <div className="bg-card rounded-xl border border-border p-6">
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-          <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
-            <svg className="w-5 h-5 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <div className="bg-card border rounded-xl p-6">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <svg
+              className="w-5 h-5 text-accent"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
               <line x1="16" y1="2" x2="16" y2="6" />
               <line x1="8" y1="2" x2="8" y2="6" />
@@ -179,93 +222,85 @@ const ActivityHeatmap = ({ weeks = 20 }: ActivityHeatmapProps) => {
             </svg>
             Activity
           </h3>
+
           <div className="flex items-center gap-3">
-            <Select
-              value={String(selectedYear)}
-              onValueChange={(v) => setSelectedYear(Number(v))}
-            >
-              <SelectTrigger className="w-[120px] bg-secondary border-0">
-                <SelectValue placeholder="Year" />
+            <Select value={selectedYear} onValueChange={setSelectedYear}>
+              <SelectTrigger className="w-[150px] h-8 text-sm">
+                <SelectValue />
               </SelectTrigger>
-              <SelectContent className="bg-card border border-border z-50">
+              <SelectContent>
+                <SelectItem value="last6">Last 6 months</SelectItem>
                 {years.map((y) => (
-                  <SelectItem key={y} value={String(y)}>
+                  <SelectItem key={y} value={y.toString()}>
                     {y}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <span className="text-sm text-muted-foreground">
-              {totalWorkouts} workouts in {selectedYear}
+
+            <span className="text-sm text-muted-foreground whitespace-nowrap">
+              {totalWorkouts} workouts in {getYearLabel()}
             </span>
           </div>
-        </div>
-
-        {/* Month labels */}
-        <div className="flex ml-8 mb-1">
-          {monthLabels.map(({ month, weekIndex }, idx) => (
-            <span 
-              key={idx} 
-              className="text-xs text-muted-foreground"
-              style={{ 
-                marginLeft: idx === 0 ? weekIndex * 14 : undefined,
-                width: idx < monthLabels.length - 1 
-                  ? (monthLabels[idx + 1].weekIndex - weekIndex) * 14 
-                  : undefined
-              }}
-            >
-              {month}
-            </span>
-          ))}
         </div>
 
         <div className="flex gap-1">
-          {/* Day labels */}
+          {/* Day labels - Mon/Wed/Fri only (Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6) */}
           <div className="flex flex-col gap-[3px] mr-1">
-            {dayLabels.map((day, idx) => (
-              <span 
-                key={day} 
-                className="text-[10px] text-muted-foreground h-[12px] leading-[12px]"
-                style={{ visibility: idx % 2 === 1 ? 'visible' : 'hidden' }}
-              >
-                {day}
-              </span>
-            ))}
+            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Sun</span>
+            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px]">Mon</span>
+            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Tue</span>
+            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px]">Wed</span>
+            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Thu</span>
+            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px]">Fri</span>
+            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Sat</span>
           </div>
 
           {/* Heatmap grid */}
-          <div className="flex gap-[3px] overflow-x-auto pb-2">
-            {weekData.map((week, weekIdx) => (
-              <div key={weekIdx} className="flex flex-col gap-[3px]">
-                {week.map((day, dayIdx) => (
-                  <Tooltip key={`${weekIdx}-${dayIdx}`}>
-                    <TooltipTrigger asChild>
-                      <div
-                        className={`w-[12px] h-[12px] rounded-sm transition-colors ${getIntensityClass(day.count)} ${day.count >= 0 ? 'hover:ring-1 hover:ring-foreground/30 cursor-pointer' : ''}`}
-                      />
-                    </TooltipTrigger>
-                    {day.count >= 0 && day.date && (
-                      <TooltipContent side="top" className="text-xs">
-                        <p className="font-medium">{getActivityLabel(day.count)}</p>
-                        <p className="text-muted-foreground">{formatDate(day.date)}</p>
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
+          <div className="flex flex-col overflow-x-auto">
+            {/* Month labels - only at month boundaries */}
+            <div className="flex gap-[3px] mb-1 overflow-visible">
+              {monthLabels.map((label, idx) => (
+                <span
+                  key={idx}
+                  className="text-xs text-muted-foreground min-w-[12px] text-left"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
 
-        {/* Legend */}
-        <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground mt-4">
-          <span>Less</span>
-          <div className="w-3 h-3 bg-muted/50 rounded-sm" />
-          <div className="w-3 h-3 bg-accent/30 rounded-sm" />
-          <div className="w-3 h-3 bg-accent/50 rounded-sm" />
-          <div className="w-3 h-3 bg-accent/75 rounded-sm" />
-          <div className="w-3 h-3 bg-accent rounded-sm" />
-          <span>More</span>
+            {/* Grid - flat row of weeks */}
+            <div className="flex gap-[3px]">
+              {weekData.map((week, weekIdx) => (
+                <div key={weekIdx} className="flex flex-col gap-[3px]">
+                  {week.map((day, dayIdx) => (
+                    <Tooltip key={`${weekIdx}-${dayIdx}`}>
+                      <TooltipTrigger asChild>
+                        <div
+                          className={`w-[12px] h-[12px] rounded-sm transition-colors ${getIntensityClass(
+                            day.count
+                          )} ${
+                            day.count >= 0
+                              ? "hover:ring-1 hover:ring-foreground/30 cursor-pointer"
+                              : ""
+                          }`}
+                        />
+                      </TooltipTrigger>
+                      {day.count >= 0 && (
+                        <TooltipContent side="top" className="text-xs">
+                          <p className="font-medium">{getLabel(day.count)}</p>
+                          <p className="text-muted-foreground">
+                            {formatDate(day.date)}
+                          </p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </TooltipProvider>
