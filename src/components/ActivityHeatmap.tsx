@@ -1,10 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { ActivityHeatmapMonth } from "react-activity-heatmap";
+import type { HeatmapActivity } from "react-activity-heatmap";
 import {
   Select,
   SelectContent,
@@ -13,11 +9,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import api from "@/lib/api";
-
-interface ActivityDay {
-  date: string;
-  count: number;
-}
 
 interface ActivityHeatmapProps {
   weeks?: number;
@@ -36,6 +27,7 @@ const ActivityHeatmap = ({ weeks = 20 }: ActivityHeatmapProps) => {
     {}
   );
   const [loading, setLoading] = useState(true);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const today = new Date();
   const currentYear = today.getFullYear();
@@ -72,126 +64,112 @@ const ActivityHeatmap = ({ weeks = 20 }: ActivityHeatmapProps) => {
     fetchWorkouts();
   }, []);
 
-  /* ---------- GENERATE DAILY DATA ---------- */
-  const activityData = useMemo(() => {
-    const data: ActivityDay[] = [];
-    let startDate: Date;
-    let endDate: Date;
+  /* ---------- CONVERT TO HEATMAP ACTIVITIES ---------- */
+  const activities = useMemo((): HeatmapActivity[] => {
+    const result: HeatmapActivity[] = [];
 
-    if (selectedYear === "last6") {
-      endDate = new Date(today);
-      startDate = new Date(today);
-      startDate.setMonth(startDate.getMonth() - 6);
-      startDate.setDate(startDate.getDate() + 1);
-    } else {
-      const year = parseInt(selectedYear);
-      startDate = new Date(year, 0, 1);
-      endDate =
-        year === today.getFullYear()
-          ? new Date(today)
-          : new Date(year, 11, 31);
-    }
+    Object.entries(workoutsByDate).forEach(([dateStr, count]) => {
+      const date = new Date(dateStr);
+      // Map workout count to level (0-4)
+      let level = 0;
+      if (count === 1) level = 1;
+      else if (count === 2) level = 2;
+      else if (count === 3) level = 3;
+      else if (count >= 4) level = 4;
 
-    const d = new Date(startDate);
-    while (d <= endDate) {
-      const dateStr = normalizeDate(d);
-      const workouts = workoutsByDate[dateStr] ?? 0;
-
-      data.push({
-        date: dateStr,
-        count: workouts > 0 ? Math.min(4, workouts) : 0,
+      result.push({
+        date,
+        count,
+        level,
       });
-
-      d.setDate(d.getDate() + 1);
-    }
-
-    return data;
-  }, [workoutsByDate, selectedYear, today]);
-
-  /* ---------- GROUP INTO SUNDAY-ALIGNED WEEKS (ALWAYS PAD) ---------- */
-  const weekData = useMemo(() => {
-    const result: ActivityDay[][] = [];
-    let currentWeek: ActivityDay[] = [];
-
-    if (activityData.length === 0) return result;
-
-    // ALWAYS pad to Sunday, regardless of year selection
-    const firstDate = new Date(activityData[0].date);
-    const startDayOfWeek = firstDate.getDay();
-
-    for (let i = 0; i < startDayOfWeek; i++) {
-      currentWeek.push({ date: "", count: -1 });
-    }
-
-    activityData.forEach((day) => {
-      currentWeek.push(day);
-      if (currentWeek.length === 7) {
-        result.push(currentWeek);
-        currentWeek = [];
-      }
     });
-
-    if (currentWeek.length > 0) {
-      result.push(currentWeek);
-    }
 
     return result;
-  }, [activityData]);
+  }, [workoutsByDate]);
 
-  /* ---------- COMPUTE MONTH LABELS (ONLY SHOW AT MONTH BOUNDARIES) ---------- */
-  const monthLabels = useMemo(() => {
-    const labels: string[] = [];
-    let currentMonth = -1;
+  /* ---------- DETERMINE MONTHS TO DISPLAY ---------- */
+  const monthsToDisplay = useMemo(() => {
+    if (selectedYear === "last6") {
+      const months: { month: number; year: number }[] = [];
+      const end = new Date(today);
+      const start = new Date(today);
+      start.setMonth(start.getMonth() - 6);
 
-    weekData.forEach((week) => {
-      const validDay = week.find((d) => d.date);
-      if (validDay) {
-        const date = new Date(validDay.date);
-        const month = date.getMonth();
-        
-        // Only show label at the first week of each month
-        if (month !== currentMonth) {
-          currentMonth = month;
-          labels.push(date.toLocaleDateString("en-US", { month: "short" }));
-        } else {
-          labels.push("");
-        }
-      } else {
-        labels.push("");
+      const current = new Date(start);
+      while (current <= end) {
+        months.push({
+          month: current.getMonth() + 1, // 1-12
+          year: current.getFullYear(),
+        });
+        current.setMonth(current.getMonth() + 1);
       }
-    });
 
-    return labels;
-  }, [weekData]);
+      return months;
+    } else {
+      const year = parseInt(selectedYear);
+      const isCurrentYear = year === today.getFullYear();
+      const endMonth = isCurrentYear ? today.getMonth() + 1 : 12;
 
-  /* ---------- HELPERS ---------- */
-  const getIntensityClass = (count: number) => {
-    if (count === -1) return "bg-transparent";
-    if (count === 0) return "bg-muted-foreground/20";
-    if (count === 1) return "bg-accent/30";
-    if (count === 2) return "bg-accent/50";
-    if (count === 3) return "bg-accent/75";
-    return "bg-accent";
-  };
+      return Array.from({ length: endMonth }, (_, i) => ({
+        month: i + 1,
+        year,
+      }));
+    }
+  }, [selectedYear, today]);
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return "";
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    });
-  };
+  /* ---------- CALCULATE TOTAL WORKOUTS FOR SELECTED PERIOD ---------- */
+  const totalWorkouts = useMemo(() => {
+    if (selectedYear === "last6") {
+      // Calculate for last 6 months
+      const end = new Date(today);
+      const start = new Date(today);
+      start.setMonth(start.getMonth() - 6);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
 
-  const getLabel = (c: number) =>
-    c === 0 ? "No workout" : `${c} workout${c > 1 ? "s" : ""}`;
-
-  const totalWorkouts = activityData.filter((d) => d.count > 0).length;
+      return Object.entries(workoutsByDate).reduce((sum, [dateStr, count]) => {
+        const date = new Date(dateStr);
+        if (date >= start && date <= end) {
+          return sum + count;
+        }
+        return sum;
+      }, 0);
+    } else {
+      // Calculate for selected year
+      const year = parseInt(selectedYear);
+      return Object.entries(workoutsByDate).reduce((sum, [dateStr, count]) => {
+        const date = new Date(dateStr);
+        if (date.getFullYear() === year) {
+          return sum + count;
+        }
+        return sum;
+      }, 0);
+    }
+  }, [workoutsByDate, selectedYear, today]);
 
   const getYearLabel = () => {
     if (selectedYear === "last6") return "the last 6 months";
     return selectedYear;
+  };
+
+  // Custom colors matching your original design
+  const customCellColors = {
+    level0: "hsl(var(--muted-foreground) / 0.2)", // bg-muted-foreground/20
+    level1: "hsl(var(--accent) / 0.3)", // bg-accent/30
+    level2: "hsl(var(--accent) / 0.5)", // bg-accent/50
+    level3: "hsl(var(--accent) / 0.75)", // bg-accent/75
+    level4: "hsl(var(--accent))", // bg-accent
+  };
+
+  // Scroll functions
+  const scroll = (direction: "left" | "right") => {
+    if (scrollContainerRef.current) {
+      const scrollAmount = 300;
+      scrollContainerRef.current.scrollBy({
+        left: direction === "left" ? -scrollAmount : scrollAmount,
+        behavior: "smooth",
+      });
+    }
   };
 
   if (loading) {
@@ -203,107 +181,176 @@ const ActivityHeatmap = ({ weeks = 20 }: ActivityHeatmapProps) => {
   }
 
   return (
-    <TooltipProvider>
-      <div className="bg-card border rounded-xl p-6">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <svg
-              className="w-5 h-5 text-accent"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-              <line x1="16" y1="2" x2="16" y2="6" />
-              <line x1="8" y1="2" x2="8" y2="6" />
-              <line x1="3" y1="10" x2="21" y2="10" />
-            </svg>
-            Activity
-          </h3>
+    <div className="bg-card border rounded-xl p-6">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
+          <svg
+            className="w-5 h-5 text-accent"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+          Activity
+        </h3>
 
-          <div className="flex items-center gap-3">
-            <Select value={selectedYear} onValueChange={setSelectedYear}>
-              <SelectTrigger className="w-[150px] h-8 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="last6">Last 6 months</SelectItem>
-                {years.map((y) => (
-                  <SelectItem key={y} value={y.toString()}>
-                    {y}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        <div className="flex items-center gap-3">
+          <Select value={selectedYear} onValueChange={setSelectedYear}>
+            <SelectTrigger className="w-[150px] h-8 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="last6">Last 6 months</SelectItem>
+              {years.map((y) => (
+                <SelectItem key={y} value={y.toString()}>
+                  {y}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
-            <span className="text-sm text-muted-foreground whitespace-nowrap">
-              {totalWorkouts} workouts in {getYearLabel()}
-            </span>
+          <span className="text-sm text-muted-foreground whitespace-nowrap">
+            {totalWorkouts} workouts in {getYearLabel()}
+          </span>
+        </div>
+      </div>
+
+      {/* Day Labels and Heatmap Container */}
+      <div className="flex items-start gap-4 mb-2 overflow-hidden">
+        <div className="flex flex-col gap-[2px] text-[10px] text-muted-foreground mt-5 flex-shrink-0">
+        <div style={{ lineHeight: "10px", transform: "translateY(-2px)" }}>
+            Mon
           </div>
+          <div style={{ height: "18px" }}></div>
+          <div style={{ lineHeight: "12px", transform: "translateY(4px)" }}>
+            Wed
+          </div>
+          <div style={{ height: "20px" }}></div>
+          <div style={{ lineHeight: "12px", transform: "translateY(4px)" }}>
+            Fri
+          </div>
+          <div style={{ height: "20px" }}></div>
         </div>
 
-        <div className="flex gap-1">
-          {/* Day labels - Mon/Wed/Fri only (Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6) */}
-          <div className="flex flex-col gap-[3px] mr-1">
-            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Sun</span>
-            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px]">Mon</span>
-            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Tue</span>
-            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px]">Wed</span>
-            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Thu</span>
-            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px]">Fri</span>
-            <span className="text-[10px] text-muted-foreground h-[12px] leading-[12px] invisible">Sat</span>
-          </div>
+        {/* Heatmap Slider Container */}
+        <div className="flex-1 relative group min-w-0">
+          {/* Left Arrow */}
+          <button
+            onClick={() => scroll("left")}
+            className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 z-10 bg-background border rounded-full p-1.5 shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-accent/10"
+            aria-label="Scroll left"
+          >
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
+            </svg>
+          </button>
 
-          {/* Heatmap grid */}
-          <div className="flex flex-col overflow-x-auto">
-            {/* Month labels - only at month boundaries */}
-            <div className="flex gap-[3px] mb-1 overflow-visible">
-              {monthLabels.map((label, idx) => (
-                <span
-                  key={idx}
-                  className="text-xs text-muted-foreground min-w-[12px] text-left"
-                >
-                  {label}
-                </span>
-              ))}
-            </div>
-
-            {/* Grid - flat row of weeks */}
-            <div className="flex gap-[3px]">
-              {weekData.map((week, weekIdx) => (
-                <div key={weekIdx} className="flex flex-col gap-[3px]">
-                  {week.map((day, dayIdx) => (
-                    <Tooltip key={`${weekIdx}-${dayIdx}`}>
-                      <TooltipTrigger asChild>
-                        <div
-                          className={`w-[12px] h-[12px] rounded-sm transition-colors ${getIntensityClass(
-                            day.count
-                          )} ${
-                            day.count >= 0
-                              ? "hover:ring-1 hover:ring-foreground/30 cursor-pointer"
-                              : ""
-                          }`}
-                        />
-                      </TooltipTrigger>
-                      {day.count >= 0 && (
-                        <TooltipContent side="top" className="text-xs">
-                          <p className="font-medium">{getLabel(day.count)}</p>
-                          <p className="text-muted-foreground">
-                            {formatDate(day.date)}
-                          </p>
-                        </TooltipContent>
-                      )}
-                    </Tooltip>
-                  ))}
+          {/* Scrollable Container */}
+          <div
+            ref={scrollContainerRef}
+            className="overflow-x-auto scrollbar-hide"
+            style={{
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+            }}
+          >
+            <div style={{ display: "flex", gap: "1rem", paddingRight: "1rem" }}>
+              {monthsToDisplay.map(({ month, year }) => (
+                <div key={`${month}-${year}`} style={{ flexShrink: 0 }}>
+                  <ActivityHeatmapMonth
+                    activities={activities}
+                    month={month}
+                    year={year}
+                    cellStyle={{
+                      borderRadius: "0.125rem",
+                      width: "12px",
+                      height: "12px",
+                    }}
+                    monthNameStyle={{
+                      fontSize: "0.75rem",
+                      color: "hsl(var(--muted-foreground))",
+                      marginBottom: "0.25rem",
+                      fontWeight: "normal",
+                    }}
+                    tooltipStyle={{
+                      border: "1px solid hsl(var(--border))",
+                      borderRadius: "0.375rem",
+                      backgroundColor: "hsl(var(--popover))",
+                      color: "hsl(var(--popover-foreground))",
+                      padding: "0.5rem",
+                      fontSize: "0.75rem",
+                    }}
+                    customCellColors={customCellColors}
+                    monthNameFormat="short"
+                    customTooltipContent={(activity) => (
+                      <div>
+                        <p className="font-medium">
+                          {activity.count === 0
+                            ? "No workout"
+                            : activity.count === 1
+                            ? "1 workout"
+                            : `${activity.count} workouts`}
+                        </p>
+                        <p className="text-muted-foreground">
+                          {activity.date.toLocaleDateString("en-US", {
+                            weekday: "short",
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </p>
+                      </div>
+                    )}
+                  />
                 </div>
               ))}
             </div>
           </div>
+
+          {/* Right Arrow */}
+          <button
+            onClick={() => scroll("right")}
+            className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 z-10 bg-background border rounded-full p-1.5 shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-accent/10"
+            aria-label="Scroll right"
+          >
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
+          </button>
         </div>
       </div>
-    </TooltipProvider>
+
+      <style>{`
+        .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
+    </div>
   );
 };
 
